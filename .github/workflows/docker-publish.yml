@@ -13,7 +13,7 @@ on:
         default: "latest"
 
 env:
-  IMAGE_NAME: "rdb-used-memory"
+  IMAGE_NAME: "falkordb/rdb-used-memory"
 
 jobs:
   build_and_publish:
@@ -38,7 +38,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: FalkorDB/${{ env.IMAGE_NAME }}:${{ github.event.inputs.tag_name || 'edge' }}
+          tags: ${{ env.IMAGE_NAME }}:${{ github.event.inputs.tag_name || 'edge' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -49,8 +49,8 @@ jobs:
           context: .
           push: true
           tags: |
-            FalkorDB/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            FalkorDB/${{ env.IMAGE_NAME }}:edge
-            FalkorDB/${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.IMAGE_NAME }}:edge
+            ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
