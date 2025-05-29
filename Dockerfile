@@ -9,12 +9,12 @@ RUN apk update && \
 
 # Copy the script into the container
 # Assuming your script is named 'rdb-used-memory.sh' and is in the same directory as the Dockerfile
-COPY rdb-used-memory.sh /usr/local/bin/rdb-used-memory.sh
+COPY rdb-used-memory.sh /usr/local/bin/rdb-used-memory
 
 # Make the script executable
-RUN chmod +x /usr/local/bin/rdb-used-memory.sh
+RUN chmod +x /usr/local/bin/rdb-used-memory
 
 # Define the entrypoint for the container.
 # This ensures that when the container runs, it executes our script.
 # We use exec form to ensure proper signal handling.
-ENTRYPOINT ["/usr/local/bin/rdb-used-memory.sh"]
+ENTRYPOINT ["/usr/local/bin/rdb-used-memory"]

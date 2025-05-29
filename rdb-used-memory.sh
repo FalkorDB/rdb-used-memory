@@ -11,7 +11,7 @@ fi
 if [ -z "$1" ]; then
     echo "Usage: $0 <rdb_file>"
     echo "This script extracts the 'used-mem' auxiliary field from a Redis RDB file"
-    echo "and outputs its value in Megabytes, based on a specific RDB format assumption."
+    echo "and outputs its value in bytes, based on a specific RDB format assumption."
     exit 1
 fi
 
