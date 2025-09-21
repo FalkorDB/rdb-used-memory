@@ -34,9 +34,7 @@ SEARCH_PREFIX="FA08757365642D6D656DC2"
 # -p: plain hexdump (no offset, no ASCII)
 # -c 256: output 256 bytes per line (reduces newlines)
 # tr -d '\n': remove all newlines to create a single continuous hex string
-echo "Getting dump..."
 HEX_DUMP=$(xxd -p -c 256 -l 200 "$RDB_FILE" | tr -d '\n')
-echo "Got dump"
 
 # Find the pattern and extract the 8 hex characters (4 bytes) immediately following it.
 # \K discards the prefix, so only the captured bytes are printed.
