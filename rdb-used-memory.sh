@@ -1,64 +1,131 @@
 #!/bin/bash
 
-# Check if xxd is installed
-if ! command -v xxd &> /dev/null
-then
-    echo "Error: 'xxd' command not found. Please install it (e.g., 'sudo apt-get install xxd' or 'sudo yum install vim-common')."
+log() {
+    if [ "$DEBUG" == "1" ]; then
+        echo "$1"
+    fi
+}
+
+# Check for xxd
+if ! command -v xxd &> /dev/null; then
+    echo "Error: 'xxd' not found."
     exit 1
 fi
 
-# Check for RDB file argument
+# Check for bc
+if ! command -v bc &> /dev/null; then
+    echo "Error: 'bc' not found."
+    exit 1
+fi
+
 if [ -z "$1" ]; then
     echo "Usage: $0 <rdb_file>"
-    echo "This script extracts the 'used-mem' auxiliary field from a Redis RDB file"
-    echo "and outputs its value in bytes, based on a specific RDB format assumption."
     exit 1
 fi
 
 RDB_FILE="$1"
-
-# Check if the RDB file exists
 if [ ! -f "$RDB_FILE" ]; then
-    echo "Error: RDB file '$RDB_FILE' not found."
+    echo "RDB file not found"
     exit 1
 fi
 
-# Define the exact hexadecimal prefix for the "used-mem" auxiliary field:
-# FA   : RDB_OPCODE_AUX (Auxiliary field indicator)
-# 08   : Length of the key "used-mem" (8 bytes)
-# 757365642D6D656D : "used-mem" in ASCII hex
-# C2   : RDB_ENC_INT32 (indicates a 32-bit integer follows)
-SEARCH_PREFIX="FA08757365642D6D656DC2"
+prefix="fa08757365642d6d656d"
 
-# Get the full hexadecimal dump of the RDB file
-# -p: plain hexdump (no offset, no ASCII)
-# -c 256: output 256 bytes per line (reduces newlines)
-# tr -d '\n': remove all newlines to create a single continuous hex string
-HEX_DUMP=$(xxd -p -c 256 -l 200 "$RDB_FILE" | tr -d '\n')
+# Dump first 500 bytes
+hex=$(xxd -p -l 500 "$RDB_FILE" | tr -d '\n')
+after_prefix=${hex#*$prefix}
 
-# Find the pattern and extract the 8 hex characters (4 bytes) immediately following it.
-# \K discards the prefix, so only the captured bytes are printed.
-# head -n 1: in case the pattern appears multiple times, take the first one.
-FOUR_BYTES_HEX=$(echo "$HEX_DUMP" | grep -o -i -E "${SEARCH_PREFIX}.{8}" | head -n 1 | sed "s/^${SEARCH_PREFIX}//ig")
-
-if [ -z "$FOUR_BYTES_HEX" ]; then
-    echo "Error: 'used-mem' auxiliary field not found with the expected prefix in '$RDB_FILE'."
-    echo "Expected prefix: $SEARCH_PREFIX followed by 4 bytes of data."
+if [ "$after_prefix" = "$hex" ]; then
+    echo "used-mem aux field not found"
     exit 1
 fi
 
-# Extract byte pairs and reverse them for little-endian to big-endian conversion
-# Example: If FOUR_BYTES_HEX is "E8891500" (little-endian bytes: 00 15 89 E8)
-# We want to form "001589E8" for direct hex conversion.
-BYTE1=${FOUR_BYTES_HEX:0:2} # E8
-BYTE2=${FOUR_BYTES_HEX:2:2} # 89
-BYTE3=${FOUR_BYTES_HEX:4:2} # 15
-BYTE4=${FOUR_BYTES_HEX:6:2} # 00
+# Read first byte to get encoding
+length_byte_hex=${after_prefix:0:2}
+length_byte=$((16#$length_byte_hex))
 
-REVERSED_HEX="${BYTE4}${BYTE3}${BYTE2}${BYTE1}" # 001589E8
+# Initialize used_mem_bytes
+used_mem_bytes=0
 
-# Convert the reversed hexadecimal string to a decimal integer
-# Bash arithmetic expansion $((16#HEX_STRING)) handles base conversion
-DEC_VALUE=$((16#$REVERSED_HEX))
+# Handle RDB string/integer encodings for the value
+enc_type=$(( (length_byte & 0xC0) >> 6 ))
+lower6=$(( length_byte & 0x3F ))
+log "Length byte: $length_byte_hex, enc_type: $enc_type, lower6: $lower6"
 
-echo "$DEC_VALUE"
+# Position in hex string (after prefix)
+pos=2
+
+if [ $enc_type -eq 0 ]; then
+    # 6-bit length string (0-63 bytes)
+    str_len=$lower6
+    log "6-bit string length: $str_len"
+elif [ $enc_type -eq 1 ]; then
+    # 14-bit length string
+    next_byte_hex=${after_prefix:$pos:2}
+    next_byte=$((16#$next_byte_hex))
+    str_len=$(( (lower6 << 8) | next_byte ))
+    pos=$((pos + 2))
+    log "14-bit string length: $str_len"
+elif [ $length_byte -eq 128 ]; then
+    # 32-bit length (0x80 = 128)
+    str_len_hex=${after_prefix:$pos:8}
+    str_len=$((16#$str_len_hex))
+    pos=$((pos + 8))
+    log "32-bit string length: $str_len"
+elif [ $length_byte -eq 129 ]; then
+    # 64-bit length (0x81 = 129)
+    str_len_hex=${after_prefix:$pos:16}
+    str_len=$((16#$str_len_hex))
+    pos=$((pos + 16))
+    log "64-bit string length: $str_len"
+elif [ $enc_type -eq 3 ]; then
+    # ENCVAL - Special encoded values
+    sub_type=$lower6
+    if [ $sub_type -eq 0 ]; then
+        # int8
+        val_hex=${after_prefix:$pos:2}
+        val=$((16#$val_hex))
+        used_mem_bytes=$val
+        log "ENCVAL int8: $val"
+    elif [ $sub_type -eq 1 ]; then
+        # int16 (little-endian)
+        val_hex=${after_prefix:$pos:4}
+        byte1=${val_hex:0:2}
+        byte2=${val_hex:2:2}
+        # Reverse for little-endian
+        reversed_hex="${byte2}${byte1}"
+        val=$((16#$reversed_hex))
+        used_mem_bytes=$val
+        log "ENCVAL int16: $val"
+    elif [ $sub_type -eq 2 ]; then
+        # int32 (little-endian)
+        val_hex=${after_prefix:$pos:8}
+        byte1=${val_hex:0:2}
+        byte2=${val_hex:2:2}
+        byte3=${val_hex:4:2}
+        byte4=${val_hex:6:2}
+        # Reverse for little-endian
+        reversed_hex="${byte4}${byte3}${byte2}${byte1}"
+        val=$((16#$reversed_hex))
+        used_mem_bytes=$val
+        log "ENCVAL int32: $val"
+    else
+        echo "Unsupported ENCVAL type $sub_type"
+        exit 1
+    fi
+else
+    echo "Unknown encoding type: $enc_type"
+    exit 1
+fi
+
+# If used_mem_bytes still zero, read ASCII string
+if [ $used_mem_bytes -eq 0 ]; then
+    str_hex=${after_prefix:$pos:$((str_len*2))}
+    used_mem_ascii=$(echo "$str_hex" | xxd -r -p)
+    # convert ASCII string to number
+    used_mem_bytes=$((10#$used_mem_ascii))
+    log "Used-mem ASCII string: $used_mem_ascii -> $used_mem_bytes bytes"
+fi
+
+used_mem_mb=$(echo "scale=2; $used_mem_bytes/1024/1024" | bc)
+echo "$used_mem_mb"
